@@ -26,7 +26,7 @@ model = model.to(device)
 model.eval()
 
 # load image
-image = Image.open("test7.jpg").convert("RGB")
+image = Image.open("test13.jpg").convert("RGB")
 image = transform(image).unsqueeze(0).to(device)
 
 # predict
