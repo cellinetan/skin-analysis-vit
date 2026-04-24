@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+*.pth
+patch_dataset/
+full_face_images/
+cropped_patches/
