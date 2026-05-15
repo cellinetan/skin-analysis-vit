@@ -1,7 +1,6 @@
 import json
 import os
 import random
-from collections import Counter
 
 import numpy as np
 import torch
@@ -10,10 +9,10 @@ from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
 import timm
 
+# CONFIG
 DATASET_PATH = "patch_dataset"
 BEST_MODEL_PATH = "vit_skin_model_best.pth"
 CLASS_NAMES_PATH = "class_names.json"
-
 BATCH_SIZE = 16
 EPOCHS = 15
 LEARNING_RATE = 0.00005
@@ -26,54 +25,64 @@ print("Using device:", device)
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
+
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(SEED)
 
+# Augmentation and transformations for data
 train_transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.RandomHorizontalFlip(p=0.5),
-    transforms.RandomRotation(10),
+    transforms.Resize((224, 224)),  # Resize gambar menjadi 224x224
+    transforms.RandomHorizontalFlip(p=0.5),  # Flip horizontal dengan 50% probabilitas
+    transforms.RandomRotation(15),  # Rotasi acak antara -15° dan 15°
     transforms.ColorJitter(
         brightness=0.15,
         contrast=0.15,
-        saturation=0.10
+        saturation=0.10,
     ),
-    transforms.ToTensor(),
+    transforms.ToTensor(),  # Convert ke tensor
     transforms.Normalize(
         mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225]
+        std=[0.229, 0.224, 0.225],
     ),
 ])
 
 val_transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
+    transforms.Resize((224, 224)),  # Resize gambar menjadi 224x224
+    transforms.ToTensor(),  # Convert ke tensor
     transforms.Normalize(
         mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225]
+        std=[0.229, 0.224, 0.225],
     ),
 ])
 
-base_dataset = datasets.ImageFolder(DATASET_PATH)
-train_dataset_full = datasets.ImageFolder(DATASET_PATH, transform=train_transform)
-val_dataset_full = datasets.ImageFolder(DATASET_PATH, transform=val_transform)
+# Function to properly collate data (convert to tensor)
+def collate_fn(batch):
+    images, labels = zip(*batch)
 
-class_names = base_dataset.classes
+    # Convert images list to tensor (ensure tensor format)
+    images = torch.stack([transforms.ToTensor()(image) for image in images], dim=0)
+    labels = torch.tensor(labels, dtype=torch.long)  # Convert labels to tensor
+
+    return images, labels
+
+# Load dataset
+dataset = datasets.ImageFolder(DATASET_PATH)
+class_names = dataset.classes
 num_classes = len(class_names)
 
 print("Classes:", class_names)
-print("Total images:", len(base_dataset))
+print("Total images:", len(dataset))
 
 if num_classes != 3:
-    raise ValueError(
-        f"Dataset harus punya 3 kelas: normal, moderate, severe. "
-        f"Sekarang terbaca {num_classes} kelas: {class_names}"
-    )
+    raise ValueError(f"Dataset harus punya 3 kelas: normal, moderate, severe. "
+                     f"Sekarang terbaca {num_classes} kelas: {class_names}")
 
+# Save class names
 with open(CLASS_NAMES_PATH, "w") as f:
     json.dump(class_names, f)
 
-targets = np.array(base_dataset.targets)
+# Split dataset into train and validation
+targets = np.array(dataset.targets)
 
 print("\nDataset count:")
 for class_index, class_name in enumerate(class_names):
@@ -95,58 +104,52 @@ for class_index in range(num_classes):
 random.shuffle(train_indices)
 random.shuffle(val_indices)
 
-train_dataset = Subset(train_dataset_full, train_indices)
-val_dataset = Subset(val_dataset_full, val_indices)
+train_dataset = Subset(dataset, train_indices)
+val_dataset = Subset(dataset, val_indices)
 
 train_loader = DataLoader(
     train_dataset,
     batch_size=BATCH_SIZE,
     shuffle=True,
-    num_workers=0
+    num_workers=0,
+    collate_fn=collate_fn,
 )
 
 val_loader = DataLoader(
     val_dataset,
     batch_size=BATCH_SIZE,
     shuffle=False,
-    num_workers=0
+    num_workers=0,
+    collate_fn=collate_fn,
 )
 
-train_targets = targets[train_indices]
-train_counts = Counter(train_targets)
+# Check image shape to ensure it's (3, 224, 224)
+sample_images, sample_labels = next(iter(train_loader))
+print("Sample batch image shape:", sample_images.shape)
+print("Sample batch label shape:", sample_labels.shape)
 
-class_weights = []
-for i in range(num_classes):
-    class_count = train_counts[i]
-    weight = len(train_targets) / (num_classes * class_count)
-    class_weights.append(weight)
-
-class_weights = torch.tensor(class_weights, dtype=torch.float).to(device)
-
-print("\nTrain count:")
-for class_index, class_name in enumerate(class_names):
-    print(f"{class_name}: {train_counts[class_index]}")
-
-print("\nClass weights:")
-for class_name, weight in zip(class_names, class_weights):
-    print(f"{class_name}: {weight.item():.4f}")
-
+# Define the model
 model = timm.create_model("vit_base_patch16_224", pretrained=True)
 model.head = nn.Linear(model.head.in_features, num_classes)
 model = model.to(device)
 
-criterion = nn.CrossEntropyLoss(weight=class_weights)
-optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0.01)
+# Loss and optimizer
+criterion = nn.CrossEntropyLoss()
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=LEARNING_RATE,
+    weight_decay=0.01,
+)
 
 best_val_acc = 0.0
 
 history = {
     "train_loss": [],
     "val_loss": [],
-    "val_acc": []
+    "val_acc": [],
 }
 
-
+# Evaluation function
 def evaluate_model():
     model.eval()
 
@@ -164,8 +167,7 @@ def evaluate_model():
             outputs = model(images)
             loss = criterion(outputs, labels)
 
-            probs = torch.softmax(outputs, dim=1)
-            preds = torch.argmax(probs, dim=1)
+            preds = torch.argmax(outputs, dim=1)
 
             total_loss += loss.item()
             total += labels.size(0)
@@ -179,7 +181,7 @@ def evaluate_model():
 
     return avg_loss, acc, confusion_matrix
 
-
+# Training loop
 print("\nTraining started...")
 
 for epoch in range(EPOCHS):
@@ -199,7 +201,7 @@ for epoch in range(EPOCHS):
 
         total_train_loss += loss.item()
 
-    avg_train_loss = total_train_loss / len(train_loader) if len(train_loader) > 0 else 0
+    avg_train_loss = total_train_loss / len(train_loader)
     val_loss, val_acc, confusion_matrix = evaluate_model()
 
     history["train_loss"].append(avg_train_loss)
@@ -225,28 +227,6 @@ print("\nFinal confusion matrix:")
 print("Rows = actual class, Columns = predicted class")
 print("Class order:", class_names)
 print(confusion_matrix.numpy())
-
-print("\nPer-class validation result:")
-
-for i, class_name in enumerate(class_names):
-    tp = confusion_matrix[i, i].item()
-    total_actual = confusion_matrix[i, :].sum().item()
-    total_predicted = confusion_matrix[:, i].sum().item()
-
-    recall = tp / total_actual if total_actual > 0 else 0
-    precision = tp / total_predicted if total_predicted > 0 else 0
-    f1 = (
-        2 * precision * recall / (precision + recall)
-        if precision + recall > 0
-        else 0
-    )
-
-    print(
-        f"{class_name} | "
-        f"Precision: {precision:.4f} | "
-        f"Recall: {recall:.4f} | "
-        f"F1-score: {f1:.4f}"
-    )
 
 with open("training_history.json", "w") as f:
     json.dump(history, f, indent=4)

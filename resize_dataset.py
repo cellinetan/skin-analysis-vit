@@ -9,6 +9,7 @@ VALID_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
 
 def trim_white_border(image, threshold=245):
+    """Crop out the white border around an image."""
     image = image.convert("RGB")
     arr = np.array(image)
 
@@ -26,6 +27,7 @@ def trim_white_border(image, threshold=245):
 
 
 def center_crop_square(image):
+    """Center-crop an image to a square shape."""
     image = image.convert("RGB")
 
     width, height = image.size
@@ -40,17 +42,21 @@ def center_crop_square(image):
 
 
 def process_image(image):
-    image = ImageOps.exif_transpose(image)
+    """Process image by trimming white border and resizing it to a fixed size."""
+    image = ImageOps.exif_transpose(image)  # Fix orientation if EXIF data exists
     image = image.convert("RGB")
 
+    # Trim white borders if necessary
     image = trim_white_border(image)
-    image = center_crop_square(image)
+
+    # Resize image to 224x224
     image = image.resize((IMAGE_SIZE, IMAGE_SIZE), Image.Resampling.LANCZOS)
 
     return image
 
 
 def resize_dataset_in_place():
+    """Resize all images in the dataset to 224x224 without adding white padding."""
     if not os.path.exists(DATASET_DIR):
         print(f"Dataset folder not found: {DATASET_DIR}")
         return
@@ -69,6 +75,7 @@ def resize_dataset_in_place():
     total_processed = 0
     total_skipped = 0
 
+    # Process each class directory
     for class_name in class_names:
         class_dir = os.path.join(DATASET_DIR, class_name)
 
@@ -80,6 +87,7 @@ def resize_dataset_in_place():
         print(f"\nProcessing class: {class_name}")
         print(f"Found images: {len(image_files)}")
 
+        # Process each image in the class
         for index, file_name in enumerate(image_files, start=1):
             image_path = os.path.join(class_dir, file_name)
 
